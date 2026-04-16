@@ -3,6 +3,7 @@
  * Allows users to input expenses by holding and speaking
  * Supports multiple languages and automatic language detection
  * Format: "Item Amount" (e.g., "Petrol 500", "Chai 50", "Gas 1000")
+ * With improved microphone permission handling and error recovery
  */
 
 import React, { useState, useRef, useEffect } from "react"
@@ -15,7 +16,8 @@ const LANGUAGES = {
   "en-IN": "🇮🇳 English (India)",
   "en-US": "🇺🇸 English (US)",
   "hi-IN": "🇮🇳 हिंदी (Hindi)",
-  "ta-IN": "🇮🇳 தமிழ் (Tamil)",
+  "kn-IN": "🇮🇳 ಕನ್ನಡ (Kannada)",
+  "ta-IN": "🇮🇳 தమిழ் (Tamil)",
   "te-IN": "🇮🇳 తెలుగు (Telugu)",
   "mr-IN": "🇮🇳 मराठी (Marathi)",
   "es-ES": "🇪🇸 Español (Spanish)",
@@ -32,8 +34,43 @@ function VoiceExpense({ onSave }) {
   const [message, setMessage] = useState("")
   const [selectedLanguage, setSelectedLanguage] = useState("en-IN")
   const [recordingTime, setRecordingTime] = useState(0)
+  const [permissionGranted, setPermissionGranted] = useState(null)
   const recognitionRef = useRef(null)
   const timerRef = useRef(null)
+
+  /**
+   * Check and request microphone permissions
+   */
+  const requestMicrophonePermission = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      setPermissionGranted(true)
+      return true
+    } catch (error) {
+      if (error.name === "NotAllowedError") {
+        setMessage("❌ Microphone access denied. Please enable it in browser settings.")
+        setPermissionGranted(false)
+      } else if (error.name === "NotFoundError") {
+        setMessage("❌ No microphone found. Please connect a microphone.")
+        setPermissionGranted(false)
+      } else {
+        setMessage("❌ Error accessing microphone. Try again.")
+        setPermissionGranted(false)
+      }
+      return false
+    }
+  }
+
+  /**
+   * Check browser support on component mount
+   */
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setMessage("❌ Speech Recognition not supported. Please use Chrome, Firefox, Safari, or Edge.")
+      setPermissionGranted(false)
+    }
+  }, [])
 
   /**
    * Initialize Web Speech API with selected language
@@ -125,7 +162,19 @@ function VoiceExpense({ onSave }) {
   /**
    * Start voice listening (on mouse down / touch start)
    */
-  const startListening = () => {
+  const startListening = async () => {
+    // Check permission first
+    if (permissionGranted === false) {
+      setMessage("❌ Please enable microphone access in browser settings")
+      return
+    }
+
+    // Request permission if not yet determined
+    if (permissionGranted === null) {
+      const hasPermission = await requestMicrophonePermission()
+      if (!hasPermission) return
+    }
+
     const recognition = initRecognition()
     if (!recognition) return
 
@@ -166,7 +215,20 @@ function VoiceExpense({ onSave }) {
     }
 
     recognition.onerror = (event) => {
-      setMessage(`❌ Error: ${event.error}`)
+      console.error("Speech recognition error:", event.error)
+      
+      // Handle specific errors
+      if (event.error === "no-speech") {
+        setMessage("⚠️ No speech detected. Try again.")
+      } else if (event.error === "network") {
+        setMessage("❌ Network error. Check your connection.")
+      } else if (event.error === "not-allowed") {
+        setMessage("❌ Microphone permission denied. Enable it in settings.")
+        setPermissionGranted(false)
+      } else {
+        setMessage(`❌ Error: ${event.error}`)
+      }
+      
       stopListening()
     }
 
@@ -174,7 +236,13 @@ function VoiceExpense({ onSave }) {
       stopListening()
     }
 
-    recognition.start()
+    try {
+      recognition.start()
+    } catch (error) {
+      console.error("Failed to start recognition:", error)
+      setMessage("❌ Failed to start voice input. Try again.")
+      stopListening()
+    }
   }
 
   /**
@@ -235,14 +303,29 @@ function VoiceExpense({ onSave }) {
           onMouseLeave={stopListening}
           onTouchStart={startListening}
           onTouchEnd={stopListening}
-          title="Hold to record, release to stop"
+          disabled={permissionGranted === false && !listening}
+          title={permissionGranted === false ? "Enable microphone in browser settings" : "Hold to record, release to stop"}
         >
-          <span className={`mic-icon ${listening ? "pulse" : ""}`}>🎤</span>
+          <span className={`mic-icon ${listening ? "pulse" : ""}`}>
+            {permissionGranted === false ? "🔇" : "🎤"}
+          </span>
           <span className="mic-text">
-            {listening ? `Recording... ${recordingTime / 10}s` : "HOLD TO SPEAK"}
+            {permissionGranted === false && !listening 
+              ? "ENABLE MIC" 
+              : listening 
+              ? `Recording... ${recordingTime / 10}s` 
+              : "HOLD TO SPEAK"}
           </span>
           {listening && <span className="pulse-ring"></span>}
         </button>
+        {permissionGranted === false && !listening && (
+          <button 
+            className="btn-retry" 
+            onClick={() => requestMicrophonePermission()}
+          >
+            🔄 Try Again
+          </button>
+        )}
       </div>
 
       {/* Transcript Display */}
